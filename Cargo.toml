@@ -15,7 +15,7 @@ default-features = false
 version = "0.2.2"
 
 [dependencies.embedded-hal]
-version = "0.2.0"
+version = "0.2.4"
 features = ["unproven"]
 
 [dependencies.byteorder]
