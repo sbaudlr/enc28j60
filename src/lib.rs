@@ -53,6 +53,10 @@ pub const MODE: Mode = Mode {
     phase: Phase::CaptureOnFirstTransition,
     polarity: Polarity::IdleLow,
 };
+/// Total buffer size (cf. section 3.2)
+pub const BUF_SZ: u16 = 8 * 1024;
+/// Maximum frame length as recommended in the data sheet
+pub const MAX_FRAME_LENGTH: u16 = 1518;
 
 /// Error
 #[derive(Debug)]
@@ -107,8 +111,6 @@ where
     INT: IntPin,
     RESET: ResetPin,
 {
-    // Maximum frame length
-    const MAX_FRAME_LENGTH: u16 = 1518; // value recommended in the data sheet
                                         // Size of the Frame check sequence (32-bit CRC)
     const CRC_SZ: u16 = 4; //
 
@@ -145,8 +147,6 @@ where
         RESET: ResetPin,
         INT: IntPin,
     {
-        // Total buffer size (cf. section 3.2)
-        const BUF_SZ: u16 = 8 * 1024;
 
         // round up `rx_buf_sz` to an even number
         if rx_buf_sz % 2 == 1 {
@@ -244,8 +244,8 @@ where
 
         // 4. Program the MAMXFL registers with the maximum frame length to be permitted to be
         // received or transmitted
-        enc28j60.write_control_register(bank2::Register::MAMXFLL, Self::MAX_FRAME_LENGTH.low())?;
-        enc28j60.write_control_register(bank2::Register::MAMXFLH, Self::MAX_FRAME_LENGTH.high())?;
+        enc28j60.write_control_register(bank2::Register::MAMXFLL, MAX_FRAME_LENGTH.low())?;
+        enc28j60.write_control_register(bank2::Register::MAMXFLH, MAX_FRAME_LENGTH.high())?;
 
         // 5. Configure the Back-to-Back Inter-Packet Gap register, MABBIPG.
         // Use recommended value of 0x12
@@ -386,7 +386,7 @@ where
     ///
     /// If `bytes` length is greater than 1514, the maximum frame length allowed by the interface.
     pub fn transmit(&mut self, bytes: &[u8]) -> Result<(), Error<E>> {
-        assert!(bytes.len() <= usize(Self::MAX_FRAME_LENGTH - Self::CRC_SZ));
+        assert!(bytes.len() <= usize(MAX_FRAME_LENGTH - Self::CRC_SZ));
 
         self.flush()?;
 
