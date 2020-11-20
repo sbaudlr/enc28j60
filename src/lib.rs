@@ -17,6 +17,9 @@
 
 #![deny(missing_docs)]
 #![deny(warnings)]
+// We'll just have to deal with this for now. We can't easily make use of the
+// v2 API, since then we'd need to be able to deal with GPIO errors as well.
+#![allow(deprecated)]
 #![no_std]
 
 extern crate byteorder;
