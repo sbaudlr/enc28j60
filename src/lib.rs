@@ -59,6 +59,8 @@ pub const MODE: Mode = Mode {
 pub enum Error<E> {
     /// Late collision
     LateCollision,
+    /// A register that was read contained an unexpected value
+    RegAssertFailure,
     /// SPI error
     Spi(E),
 }
@@ -137,7 +139,7 @@ where
         delay: &mut D,
         mut rx_buf_sz: u16,
         src: [u8; 6],
-    ) -> Result<Self, E>
+    ) -> Result<Self, Error<E>>
     where
         D: DelayMs<u8>,
         RESET: ResetPin,
@@ -179,6 +181,12 @@ where
 
         // Workaround Errata issue 1
         delay.delay_ms(1);
+
+        // Read a few registers with known initial values. This allows us to
+        // fail early if communication turns out to be broken in some way.
+        enc28j60.assert_control_register_value(bank0::Register::ERXNDL, 0b1111_1111)?;
+        enc28j60.assert_control_register_value(bank0::Register::ETXNDL, 0b0000_0000)?;
+        enc28j60.assert_control_register_value(bank0::Register::ERDPTL, 0b1111_1010)?;
 
         // disable CLKOUT output
         enc28j60.write_control_register(bank3::Register::ECOCON, 0)?;
@@ -431,6 +439,17 @@ where
     }
 
     /* Private */
+    fn assert_control_register_value<R>(&mut self, register: R, expected: u8) -> Result<(), Error<E>>
+    where
+        R: Into<Register>, {
+        let val = self.read_control_register(register)?;
+        if val == expected {
+            Ok(())
+        } else {
+            Err(Error::RegAssertFailure)
+        }
+    }
+
     fn bit_field_clear<R>(&mut self, register: R, mask: u8) -> Result<(), E>
     where
         R: Into<Register>,
