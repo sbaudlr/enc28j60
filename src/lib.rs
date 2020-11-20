@@ -23,7 +23,6 @@ extern crate byteorder;
 extern crate cast;
 extern crate embedded_hal as hal;
 
-use core::mem;
 use core::ptr;
 use core::u16;
 
@@ -333,7 +332,7 @@ where
         };
 
         // read out the first 6 bytes
-        let mut temp_buf: [u8; 6] = unsafe { mem::uninitialized() };
+        let mut temp_buf= [0u8; 6];
         self.read_buffer_memory(Some(curr_packet), &mut temp_buf)?;
 
         // next packet pointer
@@ -406,7 +405,7 @@ where
         self.write_control_register(bank0::Register::ETXNDH, txnd.high())?;
 
         // 4. reset interrupt flag
-        self.bit_field_clear(common::Register::EIR, { common::EIR::mask().txif() })?;
+        self.bit_field_clear(common::Register::EIR, common::EIR::mask().txif())?;
 
         // 5. start transmission
         self.bit_field_set(common::Register::ECON1, common::ECON1::mask().txrts())?;
