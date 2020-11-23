@@ -26,7 +26,7 @@ extern crate byteorder;
 extern crate cast;
 extern crate embedded_hal as hal;
 
-use core::ptr;
+use core::{ptr, sync::atomic::spin_loop_hint};
 use core::u16;
 
 use byteorder::{ByteOrder, LE};
@@ -323,16 +323,17 @@ where
     ///
     /// **NOTE** If there's no pending packet this method will *block* until a new packet arrives
     pub fn receive(&mut self, buffer: &mut [u8]) -> Result<u16, E> {
+        let eir = common::EIR(self.read_control_register(common::Register::EIR)?);
+        if eir.rxerif() == 1 {
+            log::warn!("Encountered receive error, clearing");
+            self.bit_field_clear(common::Register::EIR, common::EIR::mask().rxerif())?;
+        }
+
         // Busy wait for a packet
-        loop {
-            let eir = common::EIR(self.read_control_register(common::Register::EIR)?);
-
-            // TODO check for error conditions
-            debug_assert!(eir.rxerif() == 0);
-
-            if eir.pktif() == 1 {
-                break;
-            }
+        // Errata 6: The PKTIF flag cannot be trusted to report the status of
+        // pending packets. Workaround: Test EPKTCNT instead.
+        while self.pending_packets()? == 0 {
+            spin_loop_hint();
         }
 
         // prepare to read buffer memory
