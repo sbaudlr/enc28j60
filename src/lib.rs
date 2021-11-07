@@ -75,11 +75,11 @@ pub enum Event {
 }
 
 /// ENC28J60 driver
-pub struct Enc28j60<SPI, NCS, INT, RESET> {
-    int: INT,
-    ncs: NCS,
-    reset: RESET,
-    spi: SPI,
+pub struct Enc28j60<Spi, Ncs, Int, Reset> {
+    int: Int,
+    ncs: Ncs,
+    reset: Reset,
+    spi: Spi,
 
     bank: Bank,
     /// address of the next packet in buffer memory
@@ -97,12 +97,12 @@ pub struct Enc28j60<SPI, NCS, INT, RESET> {
 const NONE: u16 = u16::MAX;
 const RXST: u16 = 0;
 
-impl<SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET>
+impl<Spi, Ncs, Int, Reset> Enc28j60<Spi, Ncs, Int, Reset>
 where
-    SPI: blocking::spi::Transfer<u8> + blocking::spi::Write<u8>,
-    NCS: OutputPin,
-    INT: IntPin,
-    RESET: ResetPin,
+    Spi: blocking::spi::Transfer<u8> + blocking::spi::Write<u8>,
+    Ncs: OutputPin,
+    Int: IntPin,
+    Reset: ResetPin,
 {
                                         // Size of the Frame check sequence (32-bit CRC)
     const CRC_SZ: u16 = 4; //
@@ -127,18 +127,18 @@ where
     /// If `rx_buf_sz` is greater than `8192` (8 Kibibytes); that's the size of the ENC28J60
     /// internal memory.
     pub fn new<D>(
-        spi: SPI,
-        ncs: NCS,
-        int: INT,
-        reset: RESET,
+        spi: Spi,
+        ncs: Ncs,
+        int: Int,
+        reset: Reset,
         delay: &mut D,
         mut rx_buf_sz: u16,
         src: [u8; 6],
     ) -> Result<Self, Error>
     where
         D: DelayMs<u8>,
-        RESET: ResetPin,
-        INT: IntPin,
+        Reset: ResetPin,
+        Int: IntPin,
     {
 
         // round up `rx_buf_sz` to an even number
@@ -160,7 +160,7 @@ where
         };
 
         // (software) reset to return to a clean slate state
-        if typeid!(RESET == Unconnected) {
+        if typeid!(Reset == Unconnected) {
             enc28j60.soft_reset()?;
         } else {
             enc28j60.reset.reset(delay)?;
@@ -263,7 +263,7 @@ where
         )?;
 
         // Globally enable interrupts
-        if typeid!(INT != Unconnected) {
+        if typeid!(Int != Unconnected) {
             enc28j60.bit_field_set(common::Register::EIE, common::EIE::mask().intie())?;
         }
 
@@ -423,7 +423,7 @@ where
 
     /* Miscellaneous */
     /// Destroys the driver and returns all the hardware resources that were owned by it
-    pub fn free(self) -> (SPI, NCS, INT, RESET) {
+    pub fn free(self) -> (Spi, Ncs, Int, Reset) {
         (self.spi, self.ncs, self.int, self.reset)
     }
 
@@ -633,12 +633,12 @@ where
     }
 }
 
-impl<SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET>
+impl<Spi, Ncs, Int, Reset> Enc28j60<Spi, Ncs, Int, Reset>
 where
-    SPI: blocking::spi::Transfer<u8> + blocking::spi::Write<u8>,
-    NCS: OutputPin,
-    INT: IntPin + InputPin,
-    RESET: ResetPin,
+    Spi: blocking::spi::Transfer<u8> + blocking::spi::Write<u8>,
+    Ncs: OutputPin,
+    Int: IntPin + InputPin,
+    Reset: ResetPin,
 {
     /// Starts listening for the specified event
     pub fn listen(&mut self, event: Event) -> Result<(), Error> {
