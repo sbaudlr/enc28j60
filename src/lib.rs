@@ -20,8 +20,8 @@
 #![allow(clippy::upper_case_acronyms)]
 #![no_std]
 
-use core::{ptr, hint::spin_loop};
 use core::u16;
+use core::{hint::spin_loop, ptr};
 
 use byteorder::{ByteOrder, LE};
 use cast::{u16, usize};
@@ -105,7 +105,7 @@ where
     Int: IntPin,
     Reset: ResetPin,
 {
-                                        // Size of the Frame check sequence (32-bit CRC)
+    // Size of the Frame check sequence (32-bit CRC)
     const CRC_SZ: u16 = 4; //
 
     /* Constructors */
@@ -141,7 +141,6 @@ where
         Reset: ResetPin,
         Int: IntPin,
     {
-
         // round up `rx_buf_sz` to an even number
         if rx_buf_sz % 2 == 1 {
             rx_buf_sz += 1;
@@ -338,7 +337,7 @@ where
         };
 
         // read out the first 6 bytes
-        let mut temp_buf= [0u8; 6];
+        let mut temp_buf = [0u8; 6];
         self.read_buffer_memory(Some(curr_packet), &mut temp_buf)?;
 
         // next packet pointer
@@ -436,7 +435,8 @@ where
     /* Private */
     fn assert_control_register_value<R>(&mut self, register: R, expected: u8) -> Result<(), Error>
     where
-        R: Into<Register>, {
+        R: Into<Register>,
+    {
         let val = self.read_control_register(register)?;
         if val == expected {
             Ok(())
@@ -533,7 +533,9 @@ where
         }
 
         self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
-        self.spi.write(&[Instruction::RBM.opcode()]).map_err(|_| Error::Spi)?;
+        self.spi
+            .write(&[Instruction::RBM.opcode()])
+            .map_err(|_| Error::Spi)?;
         self.spi.transfer(buffer).map_err(|_| Error::Spi)?;
         self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
 
@@ -547,7 +549,9 @@ where
         }
 
         self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
-        self.spi.write(&[Instruction::WBM.opcode()]).map_err(|_| Error::Spi)?;
+        self.spi
+            .write(&[Instruction::WBM.opcode()])
+            .map_err(|_| Error::Spi)?;
         self.spi.write(buffer).map_err(|_| Error::Spi)?;
         self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
         Ok(())
@@ -662,8 +666,8 @@ where
 }
 
 mod private {
-    use embedded_hal::digital::v2::{InputPin, OutputPin};
     use super::Unconnected;
+    use embedded_hal::digital::v2::{InputPin, OutputPin};
 
     pub trait ResetPin {}
     pub trait IntPin {}
@@ -697,8 +701,7 @@ unsafe impl<OP> ResetPin for OP
 where
     OP: OutputPin + 'static,
 {
-    fn reset<D: DelayMs<u8>>(&mut self, delay: &mut D) -> Result<(), Error>
-    {
+    fn reset<D: DelayMs<u8>>(&mut self, delay: &mut D) -> Result<(), Error> {
         self.set_low().map_err(|_| Error::Reset)?;
         // tRSTLOW must be greater then 400ns
         delay.delay_ms(1);
