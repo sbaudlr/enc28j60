@@ -22,19 +22,15 @@
 #![allow(deprecated)]
 #![no_std]
 
-extern crate byteorder;
-extern crate cast;
-extern crate embedded_hal as hal;
-
 use core::{ptr, sync::atomic::spin_loop_hint};
 use core::u16;
 
 use byteorder::{ByteOrder, LE};
 use cast::{u16, usize};
-use hal::blocking;
-use hal::blocking::delay::DelayMs;
-use hal::digital::{InputPin, OutputPin};
-use hal::spi::{Mode, Phase, Polarity};
+use embedded_hal::blocking;
+use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::spi::{Mode, Phase, Polarity};
 
 use traits::U16Ext;
 
