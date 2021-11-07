@@ -502,7 +502,9 @@ where
         self.change_bank(register)?;
 
         let mut buffer = [Instruction::RCR.opcode() | register.addr(), 0];
-        self.spi_transfer(&mut buffer)?;
+        self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
+        self.spi.transfer(&mut buffer).map_err(|_| Error::Spi)?;
+        self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
 
         Ok(buffer[1])
     }
@@ -614,19 +616,11 @@ where
     }
 
     fn soft_reset(&mut self) -> Result<(), Error> {
-        self.spi_transfer(&mut [Instruction::SRC.opcode()])
+        self.spi_write(&[Instruction::SRC.opcode()])
     }
 
     fn txst(&self) -> u16 {
         self.rxnd + 1
-    }
-
-    fn spi_transfer(&mut self, buffer: &mut [u8]) -> Result<(), Error> {
-        self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
-        self.spi.transfer(buffer).map_err(|_| Error::Spi)?;
-        self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
-
-        Ok(())
     }
 
     fn spi_write(&mut self, buffer: &[u8]) -> Result<(), Error> {
