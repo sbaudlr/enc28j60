@@ -660,12 +660,28 @@ where
     }
 }
 
+mod private {
+    use embedded_hal::digital::v2::{InputPin, OutputPin};
+    use super::Unconnected;
+
+    pub trait ResetPin {}
+    pub trait IntPin {}
+
+    impl ResetPin for Unconnected {}
+    impl<OP> ResetPin for OP where OP: OutputPin + 'static {}
+
+    impl IntPin for Unconnected {}
+    impl<IP> IntPin for IP where IP: InputPin + 'static {}
+}
+
 /// Reset pin or interrupt pin left unconnected
 pub struct Unconnected;
 
-// FIXME this should be a closed set trait
-/// [Implementation detail] Reset pin
-pub unsafe trait ResetPin: 'static {
+/// Reset pin, which is either an [OutputPin] or [Unconnected].
+///
+/// # Safety
+/// This trait is sealed and cannot be implemented for types outside this crate.
+pub unsafe trait ResetPin: private::ResetPin + 'static {
     #[doc(hidden)]
     fn reset<D: DelayMs<u8>>(&mut self, delay: &mut D) -> Result<(), Error>;
 }
@@ -691,9 +707,11 @@ where
     }
 }
 
-// FIXME this should be a closed set trait
-/// [Implementation detail] Interrupt pin
-pub unsafe trait IntPin: 'static {}
+/// Interrupt pin, which is either an [InputPin] or [Unconnected].
+///
+/// # Safety
+/// This trait is sealed and cannot be implemented for types outside this crate.
+pub unsafe trait IntPin: private::IntPin + 'static {}
 
 unsafe impl IntPin for Unconnected {}
 
