@@ -17,6 +17,7 @@
 
 #![deny(missing_docs)]
 #![deny(warnings)]
+#![allow(clippy::upper_case_acronyms)]
 #![no_std]
 
 use core::{ptr, hint::spin_loop};
@@ -725,6 +726,8 @@ enum Bank {
     Bank3,
 }
 
+// These instructions are split by opcode and operand
+#[allow(clippy::unusual_byte_groupings)]
 #[derive(Clone, Copy)]
 enum Instruction {
     /// Read Control Register
