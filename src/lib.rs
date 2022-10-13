@@ -51,6 +51,8 @@ pub const MODE: Mode = Mode {
 pub const BUF_SZ: u16 = 8 * 1024;
 /// Maximum frame length as recommended in the data sheet
 pub const MAX_FRAME_LENGTH: u16 = 1518;
+/// Size of the Frame check sequence (32-bit CRC)
+pub const CRC_SZ: u16 = 4;
 
 /// Error
 #[derive(Debug)]
@@ -105,9 +107,6 @@ where
     Int: IntPin,
     Reset: ResetPin,
 {
-    // Size of the Frame check sequence (32-bit CRC)
-    const CRC_SZ: u16 = 4; //
-
     /* Constructors */
     /// Creates a new driver from a SPI peripheral, a NCS pin, a RESET pin and an INT
     /// (interrupt) pin
@@ -349,7 +348,7 @@ where
 
         let n = status.byte_count() as u16;
         // NOTE exclude the CRC (4 bytes)
-        let end = n - Self::CRC_SZ;
+        let end = n - CRC_SZ;
         self.read_buffer_memory(None, &mut buffer[..usize(end)])?;
 
         // update ERXRDPT
@@ -380,7 +379,7 @@ where
     ///
     /// If `bytes` length is greater than 1514, the maximum frame length allowed by the interface.
     pub fn transmit(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        assert!(bytes.len() <= usize(MAX_FRAME_LENGTH - Self::CRC_SZ));
+        assert!(bytes.len() <= usize(MAX_FRAME_LENGTH - CRC_SZ));
 
         self.flush()?;
 
