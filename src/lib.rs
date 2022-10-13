@@ -17,24 +17,18 @@
 
 #![deny(missing_docs)]
 #![deny(warnings)]
-// We'll just have to deal with this for now. We can't easily make use of the
-// v2 API, since then we'd need to be able to deal with GPIO errors as well.
-#![allow(deprecated)]
+#![allow(clippy::upper_case_acronyms)]
 #![no_std]
 
-extern crate byteorder;
-extern crate cast;
-extern crate embedded_hal as hal;
-
-use core::{ptr, sync::atomic::spin_loop_hint};
 use core::u16;
+use core::{hint::spin_loop, ptr};
 
 use byteorder::{ByteOrder, LE};
 use cast::{u16, usize};
-use hal::blocking;
-use hal::blocking::delay::DelayMs;
-use hal::digital::{InputPin, OutputPin};
-use hal::spi::{Mode, Phase, Polarity};
+use embedded_hal::blocking;
+use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::digital::v2::{InputPin, OutputPin};
+use embedded_hal::spi::{Mode, Phase, Polarity};
 
 use traits::U16Ext;
 
@@ -60,13 +54,19 @@ pub const MAX_FRAME_LENGTH: u16 = 1518;
 
 /// Error
 #[derive(Debug)]
-pub enum Error<E> {
+pub enum Error {
     /// Late collision
     LateCollision,
     /// A register that was read contained an unexpected value
     RegAssertFailure,
     /// SPI error
-    Spi(E),
+    Spi,
+    /// Error setting the chip select pin
+    ChipSelect,
+    /// Error reading the interrupt pin
+    Interrupt,
+    /// Error setting the reset pin
+    Reset,
 }
 
 /// Events that the ENC28J60 can notify about via the INT pin
@@ -75,18 +75,12 @@ pub enum Event {
     Pkt,
 }
 
-impl<E> From<E> for Error<E> {
-    fn from(e: E) -> Self {
-        Error::Spi(e)
-    }
-}
-
 /// ENC28J60 driver
-pub struct Enc28j60<SPI, NCS, INT, RESET> {
-    int: INT,
-    ncs: NCS,
-    reset: RESET,
-    spi: SPI,
+pub struct Enc28j60<Spi, Ncs, Int, Reset> {
+    int: Int,
+    ncs: Ncs,
+    reset: Reset,
+    spi: Spi,
 
     bank: Bank,
     /// address of the next packet in buffer memory
@@ -104,14 +98,14 @@ pub struct Enc28j60<SPI, NCS, INT, RESET> {
 const NONE: u16 = u16::MAX;
 const RXST: u16 = 0;
 
-impl<E, SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET>
+impl<Spi, Ncs, Int, Reset> Enc28j60<Spi, Ncs, Int, Reset>
 where
-    SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
-    NCS: OutputPin,
-    INT: IntPin,
-    RESET: ResetPin,
+    Spi: blocking::spi::Transfer<u8> + blocking::spi::Write<u8>,
+    Ncs: OutputPin,
+    Int: IntPin,
+    Reset: ResetPin,
 {
-                                        // Size of the Frame check sequence (32-bit CRC)
+    // Size of the Frame check sequence (32-bit CRC)
     const CRC_SZ: u16 = 4; //
 
     /* Constructors */
@@ -134,20 +128,19 @@ where
     /// If `rx_buf_sz` is greater than `8192` (8 Kibibytes); that's the size of the ENC28J60
     /// internal memory.
     pub fn new<D>(
-        spi: SPI,
-        ncs: NCS,
-        int: INT,
-        reset: RESET,
+        spi: Spi,
+        ncs: Ncs,
+        int: Int,
+        reset: Reset,
         delay: &mut D,
         mut rx_buf_sz: u16,
         src: [u8; 6],
-    ) -> Result<Self, Error<E>>
+    ) -> Result<Self, Error>
     where
         D: DelayMs<u8>,
-        RESET: ResetPin,
-        INT: IntPin,
+        Reset: ResetPin,
+        Int: IntPin,
     {
-
         // round up `rx_buf_sz` to an even number
         if rx_buf_sz % 2 == 1 {
             rx_buf_sz += 1;
@@ -167,10 +160,10 @@ where
         };
 
         // (software) reset to return to a clean slate state
-        if typeid!(RESET == Unconnected) {
+        if typeid!(Reset == Unconnected) {
             enc28j60.soft_reset()?;
         } else {
-            enc28j60.reset.reset(delay);
+            enc28j60.reset.reset(delay)?;
         }
 
         // This doesn't work because of a silicon bug; see workaround below
@@ -270,7 +263,7 @@ where
         )?;
 
         // Globally enable interrupts
-        if typeid!(INT != Unconnected) {
+        if typeid!(Int != Unconnected) {
             enc28j60.bit_field_set(common::Register::EIE, common::EIE::mask().intie())?;
         }
 
@@ -285,7 +278,7 @@ where
 
     /* I/O */
     /// Flushes the transmit buffer, ensuring all pending transmissions have completed
-    pub fn flush(&mut self) -> Result<(), Error<E>> {
+    pub fn flush(&mut self) -> Result<(), Error> {
         if self.txnd != NONE {
             // Wait until transmission finishes
             while common::ECON1(self.read_control_register(common::Register::ECON1)?).txrts() == 1 {
@@ -322,7 +315,7 @@ where
     /// Returns the size of the frame
     ///
     /// **NOTE** If there's no pending packet this method will *block* until a new packet arrives
-    pub fn receive(&mut self, buffer: &mut [u8]) -> Result<u16, E> {
+    pub fn receive(&mut self, buffer: &mut [u8]) -> Result<u16, Error> {
         let eir = common::EIR(self.read_control_register(common::Register::EIR)?);
         if eir.rxerif() == 1 {
             log::warn!("Encountered receive error, clearing");
@@ -333,7 +326,7 @@ where
         // Errata 6: The PKTIF flag cannot be trusted to report the status of
         // pending packets. Workaround: Test EPKTCNT instead.
         while self.pending_packets()? == 0 {
-            spin_loop_hint();
+            spin_loop();
         }
 
         // prepare to read buffer memory
@@ -344,7 +337,7 @@ where
         };
 
         // read out the first 6 bytes
-        let mut temp_buf= [0u8; 6];
+        let mut temp_buf = [0u8; 6];
         self.read_buffer_memory(Some(curr_packet), &mut temp_buf)?;
 
         // next packet pointer
@@ -386,7 +379,7 @@ where
     /// # Panics
     ///
     /// If `bytes` length is greater than 1514, the maximum frame length allowed by the interface.
-    pub fn transmit(&mut self, bytes: &[u8]) -> Result<(), Error<E>> {
+    pub fn transmit(&mut self, bytes: &[u8]) -> Result<(), Error> {
         assert!(bytes.len() <= usize(MAX_FRAME_LENGTH - Self::CRC_SZ));
 
         self.flush()?;
@@ -430,19 +423,20 @@ where
 
     /* Miscellaneous */
     /// Destroys the driver and returns all the hardware resources that were owned by it
-    pub fn free(self) -> (SPI, NCS, INT, RESET) {
+    pub fn free(self) -> (Spi, Ncs, Int, Reset) {
         (self.spi, self.ncs, self.int, self.reset)
     }
 
     /// Returns the number of packets that have been received but have not been processed yet
-    pub fn pending_packets(&mut self) -> Result<u8, E> {
+    pub fn pending_packets(&mut self) -> Result<u8, Error> {
         self.read_control_register(bank1::Register::EPKTCNT)
     }
 
     /* Private */
-    fn assert_control_register_value<R>(&mut self, register: R, expected: u8) -> Result<(), Error<E>>
+    fn assert_control_register_value<R>(&mut self, register: R, expected: u8) -> Result<(), Error>
     where
-        R: Into<Register>, {
+        R: Into<Register>,
+    {
         let val = self.read_control_register(register)?;
         if val == expected {
             Ok(())
@@ -451,47 +445,37 @@ where
         }
     }
 
-    fn bit_field_clear<R>(&mut self, register: R, mask: u8) -> Result<(), E>
+    fn bit_field_clear<R>(&mut self, register: R, mask: u8) -> Result<(), Error>
     where
         R: Into<Register>,
     {
         self._bit_field_clear(register.into(), mask)
     }
 
-    fn _bit_field_clear(&mut self, register: Register, mask: u8) -> Result<(), E> {
+    fn _bit_field_clear(&mut self, register: Register, mask: u8) -> Result<(), Error> {
         assert!(register.is_eth_register());
 
         self.change_bank(register)?;
 
-        self.ncs.set_low();
-        self.spi
-            .write(&[Instruction::BFC.opcode() | register.addr(), mask])?;
-        self.ncs.set_high();
-
-        Ok(())
+        self.spi_write(&[Instruction::BFC.opcode() | register.addr(), mask])
     }
 
-    fn bit_field_set<R>(&mut self, register: R, mask: u8) -> Result<(), E>
+    fn bit_field_set<R>(&mut self, register: R, mask: u8) -> Result<(), Error>
     where
         R: Into<Register>,
     {
         self._bit_field_set(register.into(), mask)
     }
 
-    fn _bit_field_set(&mut self, register: Register, mask: u8) -> Result<(), E> {
+    fn _bit_field_set(&mut self, register: Register, mask: u8) -> Result<(), Error> {
         assert!(register.is_eth_register());
 
         self.change_bank(register)?;
 
-        self.ncs.set_low();
-        self.spi
-            .write(&[Instruction::BFS.opcode() | register.addr(), mask])?;
-        self.ncs.set_high();
-
-        Ok(())
+        self.spi_write(&[Instruction::BFS.opcode() | register.addr(), mask])
     }
 
-    fn modify_control_register<R, F>(&mut self, register: R, f: F) -> Result<(), E>
+    fn modify_control_register<R, F>(&mut self, register: R, f: F) -> Result<(), Error>
     where
         F: FnOnce(u8) -> u8,
         R: Into<Register>,
@@ -499,7 +483,7 @@ where
         self._modify_control_register(register.into(), f)
     }
 
-    fn _modify_control_register<F>(&mut self, register: Register, f: F) -> Result<(), E>
+    fn _modify_control_register<F>(&mut self, register: Register, f: F) -> Result<(), Error>
     where
         F: FnOnce(u8) -> u8,
     {
@@ -507,26 +491,26 @@ where
         self._write_control_register(register, f(r))
     }
 
-    fn read_control_register<R>(&mut self, register: R) -> Result<u8, E>
+    fn read_control_register<R>(&mut self, register: R) -> Result<u8, Error>
     where
         R: Into<Register>,
     {
         self._read_control_register(register.into())
     }
 
-    fn _read_control_register(&mut self, register: Register) -> Result<u8, E> {
+    fn _read_control_register(&mut self, register: Register) -> Result<u8, Error> {
         self.change_bank(register)?;
 
-        self.ncs.set_low();
         let mut buffer = [Instruction::RCR.opcode() | register.addr(), 0];
-        self.spi.transfer(&mut buffer)?;
-        self.ncs.set_high();
+        self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
+        self.spi.transfer(&mut buffer).map_err(|_| Error::Spi)?;
+        self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
 
         Ok(buffer[1])
     }
 
     #[allow(dead_code)]
-    fn read_phy_register(&mut self, register: phy::Register) -> Result<u16, E> {
+    fn read_phy_register(&mut self, register: phy::Register) -> Result<u16, Error> {
         // set PHY register address
         self.write_control_register(bank2::Register::MIREGADR, register.addr())?;
 
@@ -544,52 +528,52 @@ where
         )
     }
 
-    fn read_buffer_memory(&mut self, addr: Option<u16>, buf: &mut [u8]) -> Result<(), E> {
+    fn read_buffer_memory(&mut self, addr: Option<u16>, buffer: &mut [u8]) -> Result<(), Error> {
         if let Some(addr) = addr {
             self.write_control_register(bank0::Register::ERDPTL, addr.low())?;
             self.write_control_register(bank0::Register::ERDPTH, addr.high())?;
         }
 
-        self.ncs.set_low();
-        self.spi.write(&[Instruction::RBM.opcode()])?;
-        self.spi.transfer(buf)?;
-        self.ncs.set_high();
+        self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
+        self.spi
+            .write(&[Instruction::RBM.opcode()])
+            .map_err(|_| Error::Spi)?;
+        self.spi.transfer(buffer).map_err(|_| Error::Spi)?;
+        self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
 
         Ok(())
     }
 
-    fn write_buffer_memory(&mut self, addr: Option<u16>, buffer: &[u8]) -> Result<(), E> {
+    fn write_buffer_memory(&mut self, addr: Option<u16>, buffer: &[u8]) -> Result<(), Error> {
         if let Some(addr) = addr {
             self.write_control_register(bank0::Register::EWRPTL, addr.low())?;
             self.write_control_register(bank0::Register::EWRPTH, addr.high())?;
         }
 
-        self.ncs.set_low();
-        self.spi.write(&[Instruction::WBM.opcode()])?;
-        self.spi.write(buffer)?;
-        self.ncs.set_high();
+        self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
+        self.spi
+            .write(&[Instruction::WBM.opcode()])
+            .map_err(|_| Error::Spi)?;
+        self.spi.write(buffer).map_err(|_| Error::Spi)?;
+        self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
         Ok(())
     }
 
-    fn write_control_register<R>(&mut self, register: R, value: u8) -> Result<(), E>
+    fn write_control_register<R>(&mut self, register: R, value: u8) -> Result<(), Error>
     where
         R: Into<Register>,
     {
         self._write_control_register(register.into(), value)
     }
 
-    fn _write_control_register(&mut self, register: Register, value: u8) -> Result<(), E> {
+    fn _write_control_register(&mut self, register: Register, value: u8) -> Result<(), Error> {
         self.change_bank(register)?;
 
-        self.ncs.set_low();
         let buffer = [Instruction::WCR.opcode() | register.addr(), value];
-        self.spi.write(&buffer)?;
-        self.ncs.set_high();
-
-        Ok(())
+        self.spi_write(&buffer)
     }
 
-    fn write_phy_register(&mut self, register: phy::Register, value: u16) -> Result<(), E> {
+    fn write_phy_register(&mut self, register: phy::Register, value: u16) -> Result<(), Error> {
         // set PHY register address
         self.write_control_register(bank2::Register::MIREGADR, register.addr())?;
 
@@ -604,7 +588,7 @@ where
         Ok(())
     }
 
-    fn change_bank(&mut self, register: Register) -> Result<(), E> {
+    fn change_bank(&mut self, register: Register) -> Result<(), Error> {
         let bank = register.bank();
 
         if let Some(bank) = bank {
@@ -631,76 +615,101 @@ where
         }
     }
 
-    fn soft_reset(&mut self) -> Result<(), E> {
-        self.ncs.set_low();
-        self.spi.transfer(&mut [Instruction::SRC.opcode()])?;
-        self.ncs.set_high();
-
-        Ok(())
+    fn soft_reset(&mut self) -> Result<(), Error> {
+        self.spi_write(&[Instruction::SRC.opcode()])
     }
 
     fn txst(&self) -> u16 {
         self.rxnd + 1
     }
+
+    fn spi_write(&mut self, buffer: &[u8]) -> Result<(), Error> {
+        self.ncs.set_low().map_err(|_| Error::ChipSelect)?;
+        self.spi.write(buffer).map_err(|_| Error::Spi)?;
+        self.ncs.set_high().map_err(|_| Error::ChipSelect)?;
+
+        Ok(())
+    }
 }
 
-impl<E, SPI, NCS, INT, RESET> Enc28j60<SPI, NCS, INT, RESET>
+impl<Spi, Ncs, Int, Reset> Enc28j60<Spi, Ncs, Int, Reset>
 where
-    SPI: blocking::spi::Transfer<u8, Error = E> + blocking::spi::Write<u8, Error = E>,
-    NCS: OutputPin,
-    INT: IntPin + InputPin,
-    RESET: ResetPin,
+    Spi: blocking::spi::Transfer<u8> + blocking::spi::Write<u8>,
+    Ncs: OutputPin,
+    Int: IntPin + InputPin,
+    Reset: ResetPin,
 {
     /// Starts listening for the specified event
-    pub fn listen(&mut self, event: Event) -> Result<(), E> {
+    pub fn listen(&mut self, event: Event) -> Result<(), Error> {
         match event {
             Event::Pkt => self.bit_field_set(common::Register::EIE, common::EIE::mask().pktie()),
         }
     }
 
     /// Checks if there's any interrupt pending to be processed by polling the INT pin
-    pub fn interrupt_pending(&mut self) -> bool {
-        self.int.is_low()
+    pub fn interrupt_pending(&mut self) -> Result<bool, Error> {
+        self.int.is_low().map_err(|_| Error::Interrupt)
     }
 
     /// Stops listening for the specified event
-    pub fn unlisten(&mut self, event: Event) -> Result<(), E> {
+    pub fn unlisten(&mut self, event: Event) -> Result<(), Error> {
         match event {
             Event::Pkt => self.bit_field_clear(common::Register::EIE, common::EIE::mask().pktie()),
         }
     }
 }
 
+mod private {
+    use super::Unconnected;
+    use embedded_hal::digital::v2::{InputPin, OutputPin};
+
+    pub trait ResetPin {}
+    pub trait IntPin {}
+
+    impl ResetPin for Unconnected {}
+    impl<OP> ResetPin for OP where OP: OutputPin + 'static {}
+
+    impl IntPin for Unconnected {}
+    impl<IP> IntPin for IP where IP: InputPin + 'static {}
+}
+
 /// Reset pin or interrupt pin left unconnected
 pub struct Unconnected;
 
-// FIXME this should be a closed set trait
-/// [Implementation detail] Reset pin
-pub unsafe trait ResetPin: 'static {
+/// Reset pin, which is either an [OutputPin] or [Unconnected].
+///
+/// # Safety
+/// This trait is sealed and cannot be implemented for types outside this crate.
+pub unsafe trait ResetPin: private::ResetPin + 'static {
     #[doc(hidden)]
-    fn reset<D: DelayMs<u8>>(&mut self, delay: &mut D);
+    fn reset<D: DelayMs<u8>>(&mut self, delay: &mut D) -> Result<(), Error>;
 }
 
 unsafe impl ResetPin for Unconnected {
-    fn reset<D: DelayMs<u8>>(&mut self, _delay: &mut D){}
+    fn reset<D: DelayMs<u8>>(&mut self, _delay: &mut D) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 unsafe impl<OP> ResetPin for OP
 where
     OP: OutputPin + 'static,
 {
-    fn reset<D: DelayMs<u8>>(&mut self, delay: &mut D)
-    {
-        self.set_low();
+    fn reset<D: DelayMs<u8>>(&mut self, delay: &mut D) -> Result<(), Error> {
+        self.set_low().map_err(|_| Error::Reset)?;
         // tRSTLOW must be greater then 400ns
         delay.delay_ms(1);
-        self.set_high();
+        self.set_high().map_err(|_| Error::Reset)?;
+
+        Ok(())
     }
 }
 
-// FIXME this should be a closed set trait
-/// [Implementation detail] Interrupt pin
-pub unsafe trait IntPin: 'static {}
+/// Interrupt pin, which is either an [InputPin] or [Unconnected].
+///
+/// # Safety
+/// This trait is sealed and cannot be implemented for types outside this crate.
+pub unsafe trait IntPin: private::IntPin + 'static {}
 
 unsafe impl IntPin for Unconnected {}
 
@@ -714,6 +723,8 @@ enum Bank {
     Bank3,
 }
 
+// These instructions are split by opcode and operand
+#[allow(clippy::unusual_byte_groupings)]
 #[derive(Clone, Copy)]
 enum Instruction {
     /// Read Control Register

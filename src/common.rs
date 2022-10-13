@@ -24,9 +24,9 @@ impl Register {
     }
 }
 
-impl Into<::Register> for Register {
-    fn into(self) -> ::Register {
-        ::Register::Common(self)
+impl From<Register> for crate::Register {
+    fn from(reg: Register) -> Self {
+        crate::Register::Common(reg)
     }
 }
 
